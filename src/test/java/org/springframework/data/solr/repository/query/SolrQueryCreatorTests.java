@@ -1,0 +1,478 @@
+/*
+ * Copyright 2012-2020 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+package org.springframework.data.solr.repository.query;
+
+import static org.assertj.core.api.Assertions.*;
+
+import java.lang.reflect.Method;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Date;
+
+import org.joda.time.DateTime;
+import org.joda.time.DateTimeZone;
+import org.junit.Before;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.mockito.Mock;
+import org.mockito.junit.MockitoJUnitRunner;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.geo.Box;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.Metrics;
+import org.springframework.data.geo.Point;
+import org.springframework.data.mapping.context.MappingContext;
+import org.springframework.data.projection.SpelAwareProxyProjectionFactory;
+import org.springframework.data.repository.Repository;
+import org.springframework.data.repository.core.RepositoryMetadata;
+import org.springframework.data.repository.core.support.AbstractRepositoryMetadata;
+import org.springframework.data.repository.query.parser.PartTree;
+import org.springframework.data.solr.core.DefaultQueryParser;
+import org.springframework.data.solr.core.QueryParser;
+import org.springframework.data.solr.core.mapping.SimpleSolrMappingContext;
+import org.springframework.data.solr.core.mapping.SolrPersistentProperty;
+import org.springframework.data.solr.core.query.Query;
+import org.springframework.data.solr.repository.ProductBean;
+
+/**
+ * @author Christoph Strobl
+ * @author John Dorman
+ * @author Francisco Spaeth
+ * @author Oliver Gierke
+ */
+@RunWith(MockitoJUnitRunner.class)
+public class SolrQueryCreatorTests {
+
+	private @Mock SolrEntityInformationCreator entityInformationCreatorMock;
+
+	private MappingContext<?, SolrPersistentProperty> mappingContext;
+	private RepositoryMetadata metadata = AbstractRepositoryMetadata.getMetadata(SampleRepository.class);
+	private QueryParser queryParser;
+
+	@Before
+	public void setUp() {
+		mappingContext = new SimpleSolrMappingContext();
+		queryParser = new DefaultQueryParser(mappingContext);
+	}
+
+	@Test
+	public void testCreateFindBySingleCriteria() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularity", Integer.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 100 });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("popularity:100");
+	}
+
+	@Test
+	public void testCreateFindByNotCriteria() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityIsNot", Integer.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 100 });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("-popularity:100");
+	}
+
+	@Test
+	public void testCreateFindByNotNullCriteria() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityIsNotNull");
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] {});
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("popularity:[* TO *]");
+	}
+
+	@Test
+	public void testCreateFindByNullCriteria() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityIsNull");
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] {});
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("-popularity:[* TO *]");
+	}
+
+	@Test
+	public void testCreateFindByAndQuery() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityAndPrice", Integer.class, Float.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 100, 200f });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("popularity:100 AND price:200.0");
+	}
+
+	@Test
+	public void testCreateFindByOrQuery() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityOrPrice", Integer.class, Float.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 100, 200f });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("popularity:100 OR price:200.0");
+	}
+
+	@Test
+	public void testCreateQueryWithTrueClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByAvailableTrue");
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] {});
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("inStock:true");
+	}
+
+	@Test
+	public void testCreateQueryWithFalseClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByAvailableFalse");
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] {});
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("inStock:false");
+	}
+
+	@Test
+	public void testCreateQueryWithLikeClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleLike", String.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { "j73x73r" });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("title:j73x73r*");
+	}
+
+	@Test
+	public void testCreateQueryWithLikeClauseUsingCollection() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleLike", Collection.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { Arrays.asList("one", "two", "three") });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("title:(one* two* three*)");
+	}
+
+	@Test(expected = IllegalArgumentException.class)
+	public void testCreateQueryWithInvalidCollectionType() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityLike", Collection.class);
+
+		createQueryForMethodWithArgs(method, new Object[] { Arrays.asList(1L, 2L, 3L) });
+	}
+
+	@Test
+	public void testCreateQueryWithArrayType() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityLike", String[].class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { new String[] { "one", "two", "three" } });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("popularity:(one* two* three*)");
+	}
+
+	@Test(expected = IllegalArgumentException.class)
+	public void testCreateQueryWithInvalidArrayType() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityLike", Long[].class);
+
+		createQueryForMethodWithArgs(method, new Object[] { new Long[] { 1L, 2L, 3L } });
+	}
+
+	@Test
+	public void testCreateQueryWithLikeNotClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleNotLike", String.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { "j73x73r" });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("-title:j73x73r*");
+	}
+
+	@Test
+	public void testCreateQueryWithLikeNotClauseUsingCollection() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleNotLike", Collection.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { Arrays.asList("one", "two", "three") });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("-title:(one* two* three*)");
+	}
+
+	@Test
+	public void testCreateQueryWithStartsWithClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleStartingWith", String.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { "j73x73r" });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("title:j73x73r*");
+	}
+
+	@Test
+	public void testCreateQueryWithStartsWithClauseUsingCollection() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleStartingWith", Collection.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { Arrays.asList("one", "two", "three") });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("title:(one* two* three*)");
+	}
+
+	@Test
+	public void testCreateQueryWithEndingWithClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleEndingWith", String.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { "christoph" });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("title:*christoph");
+	}
+
+	@Test
+	public void testCreateQueryWithEndingWithClauseUsingCollection() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleEndingWith", Collection.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { Arrays.asList("one", "two", "three") });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("title:(*one *two *three)");
+	}
+
+	@Test
+	public void testCreateQueryWithContainingClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleContaining", String.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { "solr" });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("title:*solr*");
+	}
+
+	@Test
+	public void testCreateQueryWithContainingClauseUsingCollection() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleContaining", Collection.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { Arrays.asList("one", "two", "three") });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("title:(*one* *two* *three*)");
+	}
+
+	@Test
+	public void testCreateQueryWithRegexClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByTitleRegex", String.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { "(\\+ \\*)" });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("title:(\\+ \\*)");
+	}
+
+	@Test
+	public void testCreateQueryWithBetweenClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityBetween", Integer.class, Integer.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 100, 200 });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("popularity:[100 TO 200]");
+	}
+
+	@Test
+	public void testCreateQueryWithBeforeClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByLastModifiedBefore", Date.class);
+
+		Query query = createQueryForMethodWithArgs(method,
+				new Object[] { new DateTime(2012, 10, 15, 5, 31, 0, DateTimeZone.UTC) });
+		assertThat(queryParser.getQueryString(query, ProductBean.class))
+				.isEqualTo("last_modified:[* TO 2012\\-10\\-15T05\\:31\\:00.000Z}");
+	}
+
+	@Test
+	public void testCreateQueryWithLessThanClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPriceLessThan", Float.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 100f });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("price:[* TO 100.0}");
+	}
+
+	@Test
+	public void testCreateQueryWithLessThanEqualsClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPriceLessThanEqual", Float.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 100f });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("price:[* TO 100.0]");
+	}
+
+	@Test
+	public void testCreateQueryWithAfterClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByLastModifiedAfter", Date.class);
+
+		Query query = createQueryForMethodWithArgs(method,
+				new Object[] { new DateTime(2012, 10, 15, 5, 31, 0, DateTimeZone.UTC) });
+		assertThat(queryParser.getQueryString(query, ProductBean.class))
+				.isEqualTo("last_modified:{2012\\-10\\-15T05\\:31\\:00.000Z TO *]");
+	}
+
+	@Test
+	public void testCreateQueryWithGreaterThanClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPriceGreaterThan", Float.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 10f });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("price:{10.0 TO *]");
+	}
+
+	@Test
+	public void testCreateQueryWithGreaterThanEqualsClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPriceGreaterThanEqual", Float.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 10f });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("price:[10.0 TO *]");
+	}
+
+	@Test
+	public void testCreateQueryWithInClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityIn", Integer[].class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { new Object[] { 1, 2, 3 } });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("popularity:(1 2 3)");
+	}
+
+	@Test
+	public void testCreateQueryWithNotInClause() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityNotIn", Integer[].class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { new Object[] { 1, 2, 3 } });
+		assertThat(queryParser.getQueryString(query, ProductBean.class)).isEqualTo("-popularity:(1 2 3)");
+	}
+
+	@Test
+	public void testCreateQueryWithNear() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByLocationNear", Point.class, Distance.class);
+
+		Query query = createQueryForMethodWithArgs(method,
+				new Object[] { new Point(48.303056, 14.290556), new Distance(5) });
+		assertThat(queryParser.getQueryString(query, ProductBean.class))
+				.isEqualTo("{!bbox pt=48.303056,14.290556 sfield=store d=5.0}");
+	}
+
+	@Test
+	public void testCreateQueryWithNearWhereUnitIsMiles() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByLocationNear", Point.class, Distance.class);
+
+		Query query = createQueryForMethodWithArgs(method,
+				new Object[] { new Point(48.303056, 14.290556), new Distance(1, Metrics.MILES) });
+		assertThat(queryParser.getQueryString(query, ProductBean.class))
+				.isEqualTo("{!bbox pt=48.303056,14.290556 sfield=store d=1.609344 score=miles}");
+	}
+
+	@Test
+	public void testCreateQueryWithWithin() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByLocationWithin", Point.class, Distance.class);
+
+		Query query = createQueryForMethodWithArgs(method,
+				new Object[] { new Point(48.303056, 14.290556), new Distance(5) });
+		assertThat(queryParser.getQueryString(query, ProductBean.class))
+				.isEqualTo("{!geofilt pt=48.303056,14.290556 sfield=store d=5.0}");
+	}
+
+	@Test
+	public void testCreateQueryWithWithinWhereUnitIsMiles() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByLocationWithin", Point.class, Distance.class);
+
+		Query query = createQueryForMethodWithArgs(method,
+				new Object[] { new Point(48.303056, 14.290556), new Distance(1, Metrics.MILES) });
+		assertThat(queryParser.getQueryString(query, ProductBean.class))
+				.isEqualTo("{!geofilt pt=48.303056,14.290556 sfield=store d=1.609344 score=miles}");
+	}
+
+	@Test
+	public void testCreateQueryWithNearUsingBox() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByLocationNear", Box.class);
+
+		Query query = createQueryForMethodWithArgs(method,
+				new Object[] { new Box(new Point(48.303056, 14.290556), new Point(48.306377, 14.283128)) });
+		assertThat(queryParser.getQueryString(query, ProductBean.class))
+				.isEqualTo("store:[48.303056,14.290556 TO 48.306377,14.283128]");
+	}
+
+	@Test
+	public void testCreateQueryWithSortDesc() throws NoSuchMethodException, SecurityException {
+		Method method = SampleRepository.class.getMethod("findByPopularityOrderByTitleDesc", Integer.class);
+
+		Query query = createQueryForMethodWithArgs(method, new Object[] { 1 });
+		assertThat(query.getSort()).isNotNull();
+		assertThat(query.getSort().getOrderFor("title").getDirection()).isEqualTo(Sort.Direction.DESC);
+	}
+
+	@Test // DATASOLR-139
+	public void testCombinationsOfOrAndShouldBeCreatedCorrectly() throws NoSuchMethodException, SecurityException {
+
+		Method method = SampleRepository.class.getMethod("findByNameOrDescriptionAndLastModifiedAfter", String.class,
+				String.class, Date.class);
+
+		Query query = createQueryForMethodWithArgs(method,
+				new Object[] { "mail", "domain", new DateTime(2012, 10, 15, 5, 31, 0, DateTimeZone.UTC) });
+		assertThat(queryParser.getQueryString(query, ProductBean.class))
+				.isEqualTo("name:mail OR description:domain AND last_modified:{2012\\-10\\-15T05\\:31\\:00.000Z TO *]");
+	}
+
+	private Query createQueryForMethodWithArgs(Method method, Object[] args) {
+		PartTree partTree = new PartTree(method.getName(), method.getReturnType());
+		SolrQueryMethod queryMethod = new SolrQueryMethod(method, metadata, new SpelAwareProxyProjectionFactory(),
+				entityInformationCreatorMock);
+		SolrQueryCreator creator = new SolrQueryCreator(partTree, new SolrParametersParameterAccessor(queryMethod, args),
+				mappingContext);
+
+		return creator.createQuery();
+	}
+
+	private interface SampleRepository extends Repository<ProductBean, String> {
+
+		ProductBean findByPopularity(Integer popularity);
+
+		ProductBean findByPopularityIsNot(Integer popularity);
+
+		ProductBean findByPopularityIsNotNull();
+
+		ProductBean findByPopularityIsNull();
+
+		ProductBean findByPopularityAndPrice(Integer popularity, Float price);
+
+		ProductBean findByPopularityOrPrice(Integer popularity, Float price);
+
+		ProductBean findByAvailableTrue();
+
+		ProductBean findByAvailableFalse();
+
+		ProductBean findByTitleLike(String prefix);
+
+		ProductBean findByTitleLike(Collection<String> prefix);
+
+		ProductBean findByPopularityLike(Collection<Long> prefix);
+
+		ProductBean findByPopularityLike(String[] prefix);
+
+		ProductBean findByPopularityLike(Long[] prefix);
+
+		ProductBean findByTitleNotLike(String prefix);
+
+		ProductBean findByTitleNotLike(Collection<String> prefix);
+
+		ProductBean findByTitleStartingWith(String prefix);
+
+		ProductBean findByTitleStartingWith(Collection<String> prefix);
+
+		ProductBean findByTitleEndingWith(String postfix);
+
+		ProductBean findByTitleEndingWith(Collection<String> postfix);
+
+		ProductBean findByTitleContaining(String fragment);
+
+		ProductBean findByTitleContaining(Collection<String> fragment);
+
+		ProductBean findByTitleRegex(String expression);
+
+		ProductBean findByPopularityBetween(Integer lower, Integer upper);
+
+		ProductBean findByLastModifiedBefore(Date date);
+
+		ProductBean findByPriceLessThan(Float price);
+
+		ProductBean findByPriceLessThanEqual(Float price);
+
+		ProductBean findByLastModifiedAfter(Date date);
+
+		ProductBean findByPriceGreaterThan(Float price);
+
+		ProductBean findByPriceGreaterThanEqual(Float price);
+
+		ProductBean findByPopularityIn(Integer... values);
+
+		ProductBean findByPopularityNotIn(Integer... values);
+
+		ProductBean findByPopularityOrderByTitleDesc(Integer popularity);
+
+		ProductBean findByLocationWithin(Point location, Distance distance);
+
+		ProductBean findByLocationNear(Point location, Distance distance);
+
+		ProductBean findByLocationNear(Box bbox);
+
+		ProductBean findByNameOrDescriptionAndLastModifiedAfter(String name, String description, Date date);
+
+	}
+
+}
